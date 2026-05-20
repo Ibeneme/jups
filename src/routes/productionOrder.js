@@ -7,6 +7,7 @@ const { uploadToBackblaze } = require("../utils/uploadToBackblaze");
 const router = express.Router();
 const fs = require("fs").promises;
 const multer = require("multer");
+const Admin = require("../models/Admin/Admin");
 
 // Configure multer to store files temporarily in memory as buffers
 const upload = multer({
@@ -14,14 +15,17 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit example (adjust as needed)
 });
 
-
 router.post("/", verifyToken, upload.array("files"), async (req, res) => {
-  console.log("\n[POST /production-order] ==================== NEW REQUEST ====================");
+  console.log(
+    "\n[POST /production-order] ==================== NEW REQUEST ===================="
+  );
 
   try {
     if (!req.body.metadata) {
       console.log("❌ Missing metadata");
-      return res.status(400).json({ success: false, error: "Missing metadata" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Missing metadata" });
     }
 
     const metadata = JSON.parse(req.body.metadata);
@@ -30,16 +34,25 @@ router.post("/", verifyToken, upload.array("files"), async (req, res) => {
 
     console.log("📦 Metadata Items Count:", items?.length);
     console.log("📂 Uploaded Files Count:", uploadedFiles.length);
-    console.log("🔍 Full req.files structure:", JSON.stringify(uploadedFiles.map(f => ({
-      originalname: f.originalname,
-      mimetype: f.mimetype,
-      fieldname: f.fieldname,
-      itemIndex: f.itemIndex,
-      size: f.size
-    })), null, 2));
+    console.log(
+      "🔍 Full req.files structure:",
+      JSON.stringify(
+        uploadedFiles.map((f) => ({
+          originalname: f.originalname,
+          mimetype: f.mimetype,
+          fieldname: f.fieldname,
+          itemIndex: f.itemIndex,
+          size: f.size,
+        })),
+        null,
+        2
+      )
+    );
 
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ success: false, error: "At least one item is required." });
+      return res
+        .status(400)
+        .json({ success: false, error: "At least one item is required." });
     }
 
     const processedItems = await Promise.all(
@@ -47,7 +60,11 @@ router.post("/", verifyToken, upload.array("files"), async (req, res) => {
         let images = [];
         let videoUri = null;
 
-        console.log(`\n🔄 PROCESSING ITEM ${index + 1}/${items.length}: ${item.name || item.category || "Unnamed"}`);
+        console.log(
+          `\n🔄 PROCESSING ITEM ${index + 1}/${items.length}: ${
+            item.name || item.category || "Unnamed"
+          }`
+        );
 
         // ───── FILTER FILES FOR THIS ITEM ─────
         const itemFiles = uploadedFiles.filter((file) => {
@@ -57,8 +74,15 @@ router.post("/", verifyToken, upload.array("files"), async (req, res) => {
             file.originalname?.match(/item[_-](\d+)/i)?.[1],
           ].filter(Boolean);
 
-          const match = possibleIndexes.some(idx => String(idx) === String(index));
-          console.log(`   File: ${file.originalname} → Possible Indexes:`, possibleIndexes, "→ Match:", match);
+          const match = possibleIndexes.some(
+            (idx) => String(idx) === String(index)
+          );
+          console.log(
+            `   File: ${file.originalname} → Possible Indexes:`,
+            possibleIndexes,
+            "→ Match:",
+            match
+          );
           return match;
         });
 
@@ -69,7 +93,11 @@ router.post("/", verifyToken, upload.array("files"), async (req, res) => {
           try {
             const isVideo = file.mimetype && file.mimetype.startsWith("video/");
 
-            console.log(`   Uploading ${isVideo ? "VIDEO" : "IMAGE"}: ${file.originalname}`);
+            console.log(
+              `   Uploading ${isVideo ? "VIDEO" : "IMAGE"}: ${
+                file.originalname
+              }`
+            );
 
             const uploadedUrl = await uploadToBackblaze(
               file.buffer,
@@ -97,7 +125,10 @@ router.post("/", verifyToken, upload.array("files"), async (req, res) => {
           videoUri: videoUri,
         };
 
-        console.log(`✅ ITEM ${index + 1} FINAL:`, JSON.stringify(resultItem, null, 2));
+        console.log(
+          `✅ ITEM ${index + 1} FINAL:`,
+          JSON.stringify(resultItem, null, 2)
+        );
         return resultItem;
       })
     );
@@ -117,7 +148,55 @@ router.post("/", verifyToken, upload.array("files"), async (req, res) => {
     });
 
     console.log(`🎉 ORDER SAVED SUCCESSFULLY! ID: ${newOrder._id}`);
-    console.log("📋 FINAL ITEMS SAVED TO SCHEMA:", JSON.stringify(newOrder.items, null, 2));
+    console.log(
+      "📋 FINAL ITEMS SAVED TO SCHEMA:",
+      JSON.stringify(newOrder.items, null, 2)
+    );
+
+    // 👑 ADMIN NOTIFICATION LOGIC (NEW)
+    try {
+      console.log(
+        "[Notification] Fetching verified administrators for new order alert..."
+      );
+      // Make sure const Admin = require("../models/Admin"); is imported at the top of your file
+      const admins = await Admin.find({ isVerified: true });
+
+      if (admins && admins.length > 0) {
+        const customerName =
+          [req.user.firstName, req.user.lastName].filter(Boolean).join(" ") ||
+          "A customer";
+        const adminTitle = "📦 New Production Order Created";
+
+        const adminBody = `${customerName} submitted a new order containing ${
+          newOrder.items.length
+        } item${newOrder.items.length > 1 ? "s" : ""}.\n\nOrder ID: ${
+          newOrder._id
+        }`;
+
+        const adminPromises = admins.map((admin) =>
+          notifyUser({
+            userId: admin._id,
+            title: adminTitle,
+            description: adminBody,
+            orderId: newOrder._id,
+            type: "ADMIN_NEW_ORDER_ALERT",
+          })
+        );
+        await Promise.all(adminPromises);
+        console.log(
+          `[Notification] Successfully alerted ${admins.length} administrators about Order #${newOrder._id}.`
+        );
+      } else {
+        console.log(
+          "[Notification] No verified administrators found to alert for this new order."
+        );
+      }
+    } catch (adminErr) {
+      console.error(
+        "[Notification] Non-fatal admin alert error on order creation:",
+        adminErr.message
+      );
+    }
 
     return res.status(201).json({
       success: true,
@@ -137,43 +216,56 @@ router.post("/", verifyToken, upload.array("files"), async (req, res) => {
 /* =====================================
    GET /production-order - All User Orders
    ===================================== */
-   router.get("/", verifyToken, async (req, res) => {
-    console.log("\n========================================");
-    console.log("[GET /production-order] Incoming request initialized");
-    console.log("[GET /production-order] Authenticated User ID:", req.user?._id);
-    console.log("========================================\n");
-  
-    try {
-      console.log(`[GET /production-order] Querying database for user: ${req.user?._id}...`);
-      
-      const orders = await ProductionOrder.find({ user: req.user._id }).sort({
-        createdAt: -1,
-      });
-  
-      console.log(`[GET /production-order] DB Query success! Records found: ${orders ? orders.length : 0}`);
-      
-      if (orders && orders.length > 0) {
-        console.log("[GET /production-order] Sample tracking ID from newest record:", orders[0]._id || orders[0].orderId);
-      } else {
-        console.log("[GET /production-order] Notice: No records matched this user query.");
-      }
-  
-      return res.status(200).json({
-        success: true,
-        data: orders,
-      });
-    } catch (error) {
-      console.error("\n❌ [GET /production-order] Fatal execution block error encountered!");
-      console.error("[GET /production-order] Error message:", error.message);
-      console.error("[GET /production-order] Full Error context stack:", error);
-      console.error("========================================\n");
-  
-      return res.status(500).json({
-        success: false,
-        error: "Failed to fetch production orders",
-      });
+router.get("/", verifyToken, async (req, res) => {
+  console.log("\n========================================");
+  console.log("[GET /production-order] Incoming request initialized");
+  console.log("[GET /production-order] Authenticated User ID:", req.user?._id);
+  console.log("========================================\n");
+
+  try {
+    console.log(
+      `[GET /production-order] Querying database for user: ${req.user?._id}...`
+    );
+
+    const orders = await ProductionOrder.find({ user: req.user._id }).sort({
+      createdAt: -1,
+    });
+
+    console.log(
+      `[GET /production-order] DB Query success! Records found: ${
+        orders ? orders.length : 0
+      }`
+    );
+
+    if (orders && orders.length > 0) {
+      console.log(
+        "[GET /production-order] Sample tracking ID from newest record:",
+        orders[0]._id || orders[0].orderId
+      );
+    } else {
+      console.log(
+        "[GET /production-order] Notice: No records matched this user query."
+      );
     }
-  });
+
+    return res.status(200).json({
+      success: true,
+      data: orders,
+    });
+  } catch (error) {
+    console.error(
+      "\n❌ [GET /production-order] Fatal execution block error encountered!"
+    );
+    console.error("[GET /production-order] Error message:", error.message);
+    console.error("[GET /production-order] Full Error context stack:", error);
+    console.error("========================================\n");
+
+    return res.status(500).json({
+      success: false,
+      error: "Failed to fetch production orders",
+    });
+  }
+});
 
 /* =====================================
    GET /production-order/:id

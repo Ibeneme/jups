@@ -4,12 +4,31 @@ const multer = require("multer");
 const ProductionUpdate = require("../models/ProductionUpdate");
 const ProductionOrder = require("../models/ProductionOrder");
 const Notification = require("../models/Notification");
+const Admin = require("../models/Admin"); // 👈 Updated to target your Admin model file
 const { uploadToBackblaze } = require("../utils/uploadToBackblaze");
 const verifyToken = require("../utils/verifyToken");
 const notifyUser = require("../utils/notifyUser");
 const mongoose = require("mongoose");
 
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Updated helper targeting the Admin collection
+const findAdminUser = async (adminName) => {
+  try {
+    if (adminName) {
+      // Searches the Admin schema using the 'fullname' property
+      const specificAdmin = await Admin.findOne({ fullname: adminName });
+      if (specificAdmin) return specificAdmin._id;
+    }
+
+    // Fallback: Grabs the first admin in the collection if names don't match
+    const defaultAdmin = await Admin.findOne();
+    return defaultAdmin ? defaultAdmin._id : null;
+  } catch (error) {
+    console.error("Error finding admin user:", error);
+    return null;
+  }
+};
 
 // 1. ADMIN: Upload Progress (Multiple Images)
 router.post(
@@ -74,6 +93,7 @@ router.get("/:orderId", async (req, res) => {
   }
 });
 
+// 3. POST: Like / Unlike an update (Notifies Customer and Admin)
 router.post("/:updateId/like", async (req, res) => {
   try {
     const { updateId } = req.params;
@@ -86,17 +106,62 @@ router.post("/:updateId/like", async (req, res) => {
     const update = await ProductionUpdate.findById(updateId);
     if (!update) return res.status(404).json({ error: "Update not found" });
 
-    // Check if the name is already in the likes array
     const existingLikeIndex = update.likes.indexOf(userName);
-
     let isLikedNow = false;
+
     if (existingLikeIndex > -1) {
-      // Remove name (Unlike)
       update.likes.splice(existingLikeIndex, 1);
     } else {
-      // Add name (Like)
       update.likes.push(userName);
       isLikedNow = true;
+
+      const order = await ProductionOrder.findById(update.orderId);
+      const adminUserId = await findAdminUser(update.adminName);
+
+      // A. Notify Customer
+      if (order) {
+        const userTitle = "Someone liked your update!";
+        const userDesc = `${userName} liked the update: "${
+          update.title || "Workshop Progress"
+        }"`;
+
+        await Notification.create({
+          user: order.user,
+          title: userTitle,
+          description: userDesc,
+          orderId: order._id,
+          type: "UPDATE_LIKE",
+          metadata: { updateId: update._id, likedBy: userName },
+        });
+
+        await notifyUser({
+          userId: order.user,
+          title: userTitle,
+          description: userDesc,
+          orderId: order._id,
+          type: "UPDATE_LIKE",
+        });
+      }
+
+      // B. Notify Admin
+      if (adminUserId && adminUserId.toString() !== req.body.adminId) {
+        await Notification.create({
+          user: adminUserId, // Passing Admin Object ID directly
+          title: "Admin Alert: Post Liked",
+          description: `${userName} liked your progress update details.`,
+          orderId: order ? order._id : null,
+          type: "ADMIN_LIKE_ALERT",
+          metadata: { updateId: update._id, likedBy: userName },
+        });
+
+        await notifyUser({
+          userId: adminUserId,
+          title: "Admin Alert: Post Liked",
+          description: `${userName} liked your progress update details.`,
+          orderId: order ? order._id : null,
+          type: "ADMIN_LIKE_ALERT",
+        });
+      }
     }
 
     await update.save();
@@ -111,8 +176,7 @@ router.post("/:updateId/like", async (req, res) => {
   }
 });
 
-// 2. SIMPLIFIED COMMENT: Add by UserName
-// Expects: { "userName": "Name", "text": "Comment Content" }
+// 4. POST: Add a Comment (Notifies Customer and Admin)
 router.post("/:updateId/comment", async (req, res) => {
   try {
     const { updateId } = req.params;
@@ -125,13 +189,58 @@ router.post("/:updateId/comment", async (req, res) => {
     const update = await ProductionUpdate.findById(updateId);
     if (!update) return res.status(404).json({ error: "Update not found" });
 
-    // Push new comment object
-    update.comments.push({
-      userName: userName,
-      text: text,
-    });
-
+    update.comments.push({ userName, text });
     await update.save();
+
+    const order = await ProductionOrder.findById(update.orderId);
+    const adminUserId = await findAdminUser(update.adminName);
+
+    const shortText = `${text.substring(0, 40)}${
+      text.length > 40 ? "..." : ""
+    }`;
+
+    // A. Notify Customer
+    if (order) {
+      const userTitle = "New Comment on your update!";
+      const userDesc = `${userName} commented: "${shortText}"`;
+
+      await Notification.create({
+        user: order.user,
+        title: userTitle,
+        description: userDesc,
+        orderId: order._id,
+        type: "UPDATE_COMMENT",
+        metadata: { updateId: update._id, commentedBy: userName, text },
+      });
+
+      await notifyUser({
+        userId: order.user,
+        title: userTitle,
+        description: userDesc,
+        orderId: order._id,
+        type: "UPDATE_COMMENT",
+      });
+    }
+
+    // B. Notify Admin
+    if (adminUserId && adminUserId.toString() !== req.body.adminId) {
+      await Notification.create({
+        user: adminUserId,
+        title: "Admin Alert: New Comment",
+        description: `${userName} left a comment: "${shortText}"`,
+        orderId: order ? order._id : null,
+        type: "ADMIN_COMMENT_ALERT",
+        metadata: { updateId: update._id, commentedBy: userName, text },
+      });
+
+      await notifyUser({
+        userId: adminUserId,
+        title: "Admin Alert: New Comment",
+        description: `${userName} left a comment: "${shortText}"`,
+        orderId: order ? order._id : null,
+        type: "ADMIN_COMMENT_ALERT",
+      });
+    }
 
     res.json({ success: true, data: update.comments });
   } catch (error) {

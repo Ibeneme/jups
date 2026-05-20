@@ -5,6 +5,7 @@ const verifyToken = require("../utils/verifyToken");
 const OnsiteMeasurement = require("../models/RequestOnsite");
 const Payment = require("../models/Payment");
 const notifyUser = require("../utils/notifyUser");
+const Admin = require("../models/Admin/Admin"); // 👈 Added to find administrators to notify
 
 const PAYSTACK_SECRET_KEY =
   process.env.PAYSTACK_SECRET_KEY ||
@@ -126,12 +127,54 @@ router.get("/verify/:reference", verifyToken, async (req, res) => {
         { paymentStatus: "paid", paidAt: new Date(paymentData.paid_at) }
       );
 
+      // Notify Customer
       await notifyUser({
         userId: measurement.userId,
         title: "Measurement Scheduled! ✅",
         description: `Payment confirmed. Our team will contact you shortly.`,
         type: "MEASUREMENT_PAID",
       });
+
+      // 👑 ADMIN NOTIFICATION LOGIC (NEW)
+      try {
+        console.log(
+          "[Notification] Fetching admins for onsite measurement payment..."
+        );
+        const admins = await Admin.find({ isVerified: true });
+
+        if (admins && admins.length > 0) {
+          const adminTitle = "📐 New Measurement Paid!";
+          const adminBody = `${
+            measurement.customerName
+          } paid ₦${MAPPING_FEE.toLocaleString()} for an onsite measurement request at ${
+            measurement.address
+          }.`;
+
+          const adminPromises = admins.map((admin) =>
+            notifyUser({
+              userId: admin._id,
+              title: adminTitle,
+              description: adminBody,
+              orderId: measurement._id,
+              type: "ADMIN_MEASUREMENT_ALERT",
+            })
+          );
+
+          await Promise.all(adminPromises);
+          console.log(
+            `[Notification] Successfully alerted ${admins.length} administrators.`
+          );
+        } else {
+          console.log(
+            "[Notification] No verified administrators found to alert."
+          );
+        }
+      } catch (adminErr) {
+        console.error(
+          "[Notification] Non-fatal admin alert error:",
+          adminErr.message
+        );
+      }
 
       return res.status(200).json({ success: true, measurement });
     }
@@ -167,48 +210,49 @@ router.get("/my-requests", verifyToken, async (req, res) => {
   }
 });
 
-
 // ───── PATCH: Mark Onsite Measurement as Completed ─────
 router.patch("/complete/:id", async (req, res) => {
-    try {
-      const { id } = req.params;
-  
-      // 1. Find the request
-      const measurement = await OnsiteMeasurement.findById(id);
-  
-      if (!measurement) {
-        return res.status(404).json({ success: false, error: "Request not found." });
-      }
-  
-      // 2. Strict validation: Only 'scheduled' can move to 'completed'
-      if (measurement.status !== "scheduled") {
-        return res.status(400).json({ 
-          success: false, 
-          error: `Cannot complete request. Current status is '${measurement.status}', but it must be 'scheduled'.` 
-        });
-      }
-  
-      // 3. Update status
-      measurement.status = "completed";
-      measurement.completedAt = new Date(); // Good for records
-      await measurement.save();
-  
-      // 4. Notify the user
-      await notifyUser({
-        userId: measurement.userId,
-        title: "Measurement Completed! 📐",
-        description: `Your onsite measurement for ${measurement.address} has been marked as completed.`,
-        type: "MEASUREMENT_COMPLETED",
-      });
-  
-      res.status(200).json({
-        success: true,
-        message: "Status updated to completed.",
-        data: measurement,
-      });
-    } catch (error) {
-      res.status(500).json({ success: false, error: error.message });
+  try {
+    const { id } = req.params;
+
+    // 1. Find the request
+    const measurement = await OnsiteMeasurement.findById(id);
+
+    if (!measurement) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Request not found." });
     }
-  });
+
+    // 2. Strict validation: Only 'scheduled' can move to 'completed'
+    if (measurement.status !== "scheduled") {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot complete request. Current status is '${measurement.status}', but it must be 'scheduled'.`,
+      });
+    }
+
+    // 3. Update status
+    measurement.status = "completed";
+    measurement.completedAt = new Date(); // Good for records
+    await measurement.save();
+
+    // 4. Notify the user
+    await notifyUser({
+      userId: measurement.userId,
+      title: "Measurement Completed! 📐",
+      description: `Your onsite measurement for ${measurement.address} has been marked as completed.`,
+      type: "MEASUREMENT_COMPLETED",
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Status updated to completed.",
+      data: measurement,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 module.exports = router;

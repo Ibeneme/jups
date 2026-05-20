@@ -4,7 +4,7 @@ const notificationSchema = new mongoose.Schema(
   {
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      ref: "User", // Can hold a User or Admin ID depending on the recipient
       required: true,
       index: true,
     },
@@ -24,16 +24,21 @@ const notificationSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: [
-        "ORDER_PLACED", // Initial order creation
-        "ORDER_PAID", // Payment/Installment confirmation
-        "ORDER_UPDATE", // General status change
-        "PRODUCTION_UPDATE", // Workshop photos/progress
-        "COMMENT_ADDED", // User/Admin comments
-        "INTERACTION", // Likes/Reactions
-        "SECURITY_ALERT", // 🛡️ NEW: Login alerts and security changes
+        "ORDER_PLACED",
+        "ORDER_PAID",
+        "ORDER_UPDATE",
+        "PRODUCTION_UPDATE",
+        "COMMENT_ADDED",
+        "UPDATE_COMMENT",
+        "ADMIN_COMMENT_ALERT", // 📣 NEW: Notifies admin when a user comments
+        "INTERACTION",
+        "UPDATE_LIKE",
+        "ADMIN_LIKE_ALERT", // 📣 NEW: Notifies admin when a user likes
+        "SECURITY_ALERT",
         "ORDER_DISPATCHED",
         "ORDER_DELIVERED",
         "ORDER_COMPLETED",
+        "ADMIN_PAYMENT_ALERT",
       ],
       required: true,
     },

@@ -1,6 +1,7 @@
 const sendEmailTransporter = require("./sendEmailTransporter");
 const sendExpoPush = require("./sendExpoPush");
 const User = require("../models/User");
+const Admin = require("../models/Admin/Admin"); // 👈 Added to find administrators if the ID doesn't belong to a User
 
 /**
  * @param {Object} params
@@ -12,35 +13,49 @@ const User = require("../models/User");
  */
 const notifyUser = async ({ userId, title, description, orderId, type }) => {
   console.log("--------------------------------------------------");
-  console.log(`🚀 [NOTIFY_START] User: ${userId} | Type: ${type}`);
+  console.log(`🚀 [NOTIFY_START] Recipient: ${userId} | Type: ${type}`);
 
   try {
-    const user = await User.findById(userId);
+    // 1. Try finding target recipient in the User collection first
+    let recipient = await User.findById(userId);
+    let isUserAdmin = false;
 
-    if (!user) {
-      console.error(`❌ [USER_NOT_FOUND] No user exists with ID: ${userId}, `, user);
+    // 2. Fallback to Admin collection if user was not found
+    if (!recipient) {
+      console.log(`🔍 [RECIPIENT_CHECK] ID not found in Users, checking Admin collection...`);
+      recipient = await Admin.findById(userId);
+      if (recipient) {
+        isUserAdmin = true;
+      }
+    }
+
+    if (!recipient) {
+      console.error(`❌ [RECIPIENT_NOT_FOUND] No User or Admin exists with ID: ${userId}`);
       return;
     }
 
-    console.log(user,
-      `👤 [USER_DATA] Found: ${user.firstName} | Email: ${
-        user.email
-      } | Token: ${user.expoPushToken ? "Yes" : "No"}`
+    // Standardize firstName variable name for fallback handling
+    const recipientName = recipient.firstName || (isUserAdmin ? "Admin" : "User");
+
+    console.log(
+      `👤 [RECIPIENT_DATA] Found: ${recipientName} | Email: ${
+        recipient.email
+      } | Token: ${recipient.expoPushToken ? "Yes" : "No"} | Role: ${isUserAdmin ? "Admin" : "User"}`
     );
 
     /* ==========================
        🔔 EXPO PUSH NOTIFICATION
     ========================== */
     let pushSuccess = false;
-    if (user.expoPushToken) {
+    if (recipient.expoPushToken) {
       console.log(`📲 [PUSH_ATTEMPT] Dispatching to Expo...`);
 
       try {
         await sendExpoPush({
-          expoPushToken: user.expoPushToken,
+          expoPushToken: recipient.expoPushToken,
           title,
           body: description,
-          data: { type, orderId, userId: user._id.toString() },
+          data: { type, orderId, userId: recipient._id.toString(), isAdminAlert: isUserAdmin },
         });
         console.log(`✅ [PUSH_SUCCESS] Notification sent to device.`);
         pushSuccess = true;
@@ -48,19 +63,19 @@ const notifyUser = async ({ userId, title, description, orderId, type }) => {
         console.error(`⚠️ [PUSH_FAILED] Error sending push:`, err.message);
       }
     } else {
-      console.log(`⚠️ [PUSH_SKIPPED] User has no expoPushToken registered.`);
+      console.log(`⚠️ [PUSH_SKIPPED] Recipient has no expoPushToken registered.`);
     }
 
     /* ==========================
        📧 EMAIL NOTIFICATION
     ========================== */
     let emailSuccess = false;
-    if (user.email) {
-      console.log(`📩 [EMAIL_ATTEMPT] Sending email via transporter...`);
+    if (recipient.email) {
+      console.log(`📩 [EMAIL_ATTEMPT] Sending email via transporter to ${recipient.email}...`);
 
       try {
         await sendEmailTransporter({
-          to: user.email,
+          to: recipient.email,
           subject: `CloneKraft: ${title}`,
           html: `
             <div style="background-color: #f9f9f9; padding: 40px 20px; font-family: Arial, sans-serif;">
@@ -70,7 +85,7 @@ const notifyUser = async ({ userId, title, description, orderId, type }) => {
                 </div>
                 <div style="padding: 30px;">
                   <h2 style="color: #111;">${title}</h2>
-                  <p>Hi ${user.firstName || "User"},</p>
+                  <p>Hi ${recipientName},</p>
                   <p>${description}</p>
                 </div>
                 <div style="padding: 20px; background-color: #fafafa; text-align: center; font-size: 12px; color: #aaa;">
@@ -80,7 +95,7 @@ const notifyUser = async ({ userId, title, description, orderId, type }) => {
             </div>
           `,
         });
-        console.log(`✅ [EMAIL_SUCCESS] Email sent to ${user.email}`);
+        console.log(`✅ [EMAIL_SUCCESS] Email sent to ${recipient.email}`);
         emailSuccess = true;
       } catch (err) {
         console.error(`⚠️ [EMAIL_FAILED] Error sending email:`, err.message);
@@ -90,8 +105,9 @@ const notifyUser = async ({ userId, title, description, orderId, type }) => {
     // FINAL SUMMARY CONSOLE LOG
     console.log("📊 [NOTIFICATION_SUMMARY]");
     console.table({
-      User: user.firstName || userId,
+      Recipient: recipientName,
       Type: type,
+      IsAdmin: isUserAdmin,
       PushSent: pushSuccess,
       EmailSent: emailSuccess,
       Timestamp: new Date().toLocaleTimeString(),

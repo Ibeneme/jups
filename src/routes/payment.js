@@ -5,6 +5,7 @@ const ProductionOrder = require("../models/ProductionOrder");
 const Payment = require("../models/Payment");
 const Notification = require("../models/Notification"); // 👈 Added for history storage
 const notifyUser = require("../utils/notifyUser");
+const Admin = require("../models/Admin/Admin"); // 👈 Added to find administrators to notify
 
 const router = express.Router();
 
@@ -246,6 +247,62 @@ router.get("/verify/:reference", verifyToken, async (req, res) => {
       orderId: order._id,
       type: "ORDER_PAID",
     });
+
+    // 👑 ADMIN NOTIFICATION LOGIC (NEW)
+    try {
+      console.log(
+        "[Notification] Fetching admins for incoming payment alert..."
+      );
+      const admins = await Admin.find({ isVerified: true }); // Only pick verified admins
+
+      if (admins && admins.length > 0) {
+        const adminTitle = "🚨 New Payment Received!";
+        const adminBody = `Order #${
+          order._id
+        } received a payment of ₦${amountPaidInThisTrx.toLocaleString()}.${
+          isFullPayment
+            ? " Order is now fully paid."
+            : ` Balance left: ₦${order.balanceRemaining.toLocaleString()}.`
+        }`;
+
+        // Create an alert loop for each administrator found
+        const adminPromises = admins.map(async (admin) => {
+          // Log inside DB history for the admin dashboard if needed
+          await Notification.create({
+            user: admin._id, // References the admin ID
+            title: adminTitle,
+            description: adminBody,
+            orderId: order._id,
+            type: "ADMIN_PAYMENT_ALERT",
+            metadata: { amount: amountPaidInThisTrx, orderId: order._id },
+          });
+
+          // Shoot the push notification over
+          return notifyUser({
+            userId: admin._id,
+            title: adminTitle,
+            description: adminBody,
+            orderId: order._id,
+            type: "ADMIN_PAYMENT_ALERT",
+          });
+        });
+
+        await Promise.all(adminPromises);
+        console.log(
+          `[Notification] Successfully alerted ${admins.length} administrators.`
+        );
+      } else {
+        console.log(
+          "[Notification] No verified administrators found to alert."
+        );
+      }
+    } catch (adminErr) {
+      // Wrapped in a separate try/catch block so a notification hiccup won't crash the user response flow
+      console.error(
+        "[Notification] Non-fatal admin alert error:",
+        adminErr.message
+      );
+    }
 
     console.log(
       `[VERIFY COMPLETE] ✅ Order ${order._id} status is now: ${order.status}`
