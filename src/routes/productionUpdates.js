@@ -82,13 +82,34 @@ router.post(
 );
 
 // 2. GET: Fetch updates for an order
+// 2. GET: Fetch updates for an order
 router.get("/:orderId", async (req, res) => {
   try {
-    const updates = await ProductionUpdate.find({
-      orderId: req.params.orderId,
-    }).sort({ createdAt: -1 });
-    res.json({ success: true, data: updates });
+    const { orderId } = req.params;
+
+    // 1. Instantly mark all comments on this order's updates as read by the user
+    // Using Mongoose positional filter array syntax ($[]) to hit every element in the comments array
+    await ProductionUpdate.updateMany(
+      { orderId: orderId, "comments.isReadByUser": false },
+      { $set: { "comments.$[].isReadByUser": true } }
+    );
+
+    // 2. Fetch the newly updated list to pass back down to the app
+    const updates = await ProductionUpdate.find({ orderId }).sort({
+      createdAt: -1,
+    });
+
+    // 3. Since we just read them all, the current unread count for this order drops to 0
+    res.json({
+      success: true,
+      data: updates,
+      unreadCommentsCount: 0,
+    });
   } catch (error) {
+    console.error(
+      "[GET /production-update/:orderId] Reset-on-read execution failed:",
+      error
+    );
     res.status(500).json({ error: error.message });
   }
 });
@@ -244,6 +265,32 @@ router.post("/:updateId/comment", async (req, res) => {
 
     res.json({ success: true, data: update.comments });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 5. PATCH: Mark all production updates for an order as read by the user
+router.patch("/:orderId/read", async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(orderId)) {
+      return res.status(400).json({ error: "Invalid orderId format." });
+    }
+
+    // Update all updates linked to this order where isReadByUser is currently false
+    const result = await ProductionUpdate.updateMany(
+      { orderId: orderId, isReadByUser: false },
+      { $set: { isReadByUser: true } }
+    );
+
+    res.json({
+      success: true,
+      message: "Production updates successfully marked as read.",
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (error) {
+    console.error("[PATCH /production-update/:orderId/read] Failed:", error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -3,6 +3,8 @@ const mongoose = require("mongoose");
 const CommentSchema = new mongoose.Schema({
   userName: { type: String, required: true },
   text: { type: String, required: true },
+  isReadByUser: { type: Boolean, default: false }, // 👈 Track if the client customer read this comment
+  isReadByAdmin: { type: Boolean, default: false }, // 👈 Track if the workshop management team read this comment
   createdAt: { type: Date, default: Date.now },
 });
 

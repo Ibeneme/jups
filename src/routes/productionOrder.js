@@ -8,6 +8,7 @@ const router = express.Router();
 const fs = require("fs").promises;
 const multer = require("multer");
 const Admin = require("../models/Admin/Admin");
+const ProductionUpdate = require("../models/ProductionUpdate");
 
 // Configure multer to store files temporarily in memory as buffers
 const upload = multer({
@@ -237,6 +238,31 @@ router.get("/", verifyToken, async (req, res) => {
       }`
     );
 
+    // ⚡ Calculate unread comment metrics for all returned orders concurrently
+    const ordersWithCounts = await Promise.all(
+      orders.map(async (order) => {
+        // Find all progress updates associated with this specific order
+        const updates = await ProductionUpdate.find({ orderId: order._id });
+
+        // Sum up the comments where 'isReadByUser' is explicitly false
+        let unreadCommentsCount = 0;
+        updates.forEach((update) => {
+          if (update.comments && update.comments.length > 0) {
+            const unread = update.comments.filter(
+              (c) => c.isReadByUser === false
+            );
+            unreadCommentsCount += unread.length;
+          }
+        });
+
+        // Convert the Mongoose document to a plain object to bind the custom counter safely
+        return {
+          ...order.toObject(),
+          unreadCommentsCount,
+        };
+      })
+    );
+
     if (orders && orders.length > 0) {
       console.log(
         "[GET /production-order] Sample tracking ID from newest record:",
@@ -250,7 +276,7 @@ router.get("/", verifyToken, async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: orders,
+      data: ordersWithCounts, // 👈 Returns payload injected with unread counts
     });
   } catch (error) {
     console.error(
@@ -268,8 +294,8 @@ router.get("/", verifyToken, async (req, res) => {
 });
 
 /* =====================================
-   GET /production-order/:id
-   ===================================== */
+     GET /production-order/:id
+     ===================================== */
 router.get("/:id", verifyToken, async (req, res) => {
   try {
     const order = await ProductionOrder.findOne({
@@ -281,7 +307,23 @@ router.get("/:id", verifyToken, async (req, res) => {
       return res.status(404).json({ success: false, error: "Order not found" });
     }
 
-    return res.status(200).json({ success: true, data: order });
+    // ⚡ Compute unread count for this individual document view
+    const updates = await ProductionUpdate.find({ orderId: order._id });
+    let unreadCommentsCount = 0;
+    updates.forEach((update) => {
+      if (update.comments && update.comments.length > 0) {
+        const unread = update.comments.filter((c) => c.isReadByUser === false);
+        unreadCommentsCount += unread.length;
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...order.toObject(),
+        unreadCommentsCount, // 👈 Added here too
+      },
+    });
   } catch (error) {
     console.error("[GET /:id] Error:", error);
     return res
