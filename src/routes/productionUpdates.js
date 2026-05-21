@@ -82,35 +82,55 @@ router.post(
 );
 
 // 2. GET: Fetch updates for an order
-// 2. GET: Fetch updates for an order
 router.get("/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
 
-    // 1. Instantly mark all comments on this order's updates as read by the user
-    // Using Mongoose positional filter array syntax ($[]) to hit every element in the comments array
-    await ProductionUpdate.updateMany(
-      { orderId: orderId, "comments.isReadByUser": false },
-      { $set: { "comments.$[].isReadByUser": true } }
+    console.log(`📥 [Mark All Read] Request received for orderId: ${orderId}`);
+
+    if (!orderId) {
+      return res.status(400).json({ success: false, message: "orderId is required" });
+    }
+
+    // ✅ Best & Most Reliable Way: Mark ALL comments as read
+    const updateResult = await ProductionUpdate.updateMany(
+      { orderId: orderId },
+      { 
+        $set: { 
+          "comments.$[].isReadByUser": true 
+        } 
+      }
     );
 
-    // 2. Fetch the newly updated list to pass back down to the app
-    const updates = await ProductionUpdate.find({ orderId }).sort({
-      createdAt: -1,
-    });
+    console.log(`✅ Updated ${updateResult.modifiedCount} documents - All comments marked as read`);
 
-    // 3. Since we just read them all, the current unread count for this order drops to 0
+    // Fetch the updated data
+    const updates = await ProductionUpdate.find({ orderId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    console.log(`📊 Returned ${updates.length} production updates`);
+
+    // Optional: Double-check one update
+    if (updates.length > 0) {
+      const totalComments = updates.reduce((sum, u) => sum + (u.comments?.length || 0), 0);
+      console.log(`Total comments across all updates: ${totalComments}`);
+    }
+
     res.json({
       success: true,
       data: updates,
       unreadCommentsCount: 0,
+      message: "All comments marked as read successfully"
     });
+
   } catch (error) {
-    console.error(
-      "[GET /production-update/:orderId] Reset-on-read execution failed:",
-      error
-    );
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error marking all comments as read:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to mark comments as read",
+      error: error.message
+    });
   }
 });
 
