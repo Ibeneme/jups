@@ -42,6 +42,11 @@ const ProductionOrderSchema = new mongoose.Schema(
     deliveryAddress: { type: String, required: false },
     explanation: { type: String },
 
+
+
+  
+
+
     assignedCarpenters: [
       { type: mongoose.Schema.Types.ObjectId, ref: "Carpenter" },
     ],
@@ -53,6 +58,7 @@ const ProductionOrderSchema = new mongoose.Schema(
       { type: mongoose.Schema.Types.ObjectId, ref: "InteriorDesigner" },
     ],
 
+    
     isInstalment: { type: Boolean, default: false },
     amountPaid: { type: Number, default: 0 },
     balanceRemaining: { type: Number, default: 0 },
